@@ -20,13 +20,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    print(args)
 
     if args.input is None:
         image_path = find_first_image(Path("data"))
     else:
         image_path = args.input
-
+    
 
     print(f"Processing image: {image_path}")
     process_image(image_path, args.results_dir)
