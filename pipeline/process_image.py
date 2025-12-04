@@ -26,6 +26,7 @@ from .to_grayscale import to_grayscale
 from .visualize_distance_map import visualize_distance_map
 from .visualize_markers import visualize_markers
 from .ensure_dir import ensure_dir
+from .compute_iou_dice import compute_iou_dice
 
 
 def process_image(image_path: Path, results_dir: Path) -> None:
@@ -34,11 +35,21 @@ def process_image(image_path: Path, results_dir: Path) -> None:
     masks_dir = results_dir / "masks"
     features_dir = results_dir / "features"
     
-    masked_path = str(image_path).split("\\")
-    masked_path[2] = "masks"
-    masked_path = Path("\\".join(masked_path))
+    # Try to locate a paired ground-truth mask (optional)
+    gt_candidate = [
+        image_path.parent.parent / "masks" / image_path.name,
+    ]
+
+    masked_image = None
+    for candidate in gt_candidate:
+        if candidate.exists():
+            try:
+                masked_image = load_image(candidate)
+            except Exception:
+                masked_image = None
+            break
     
-    masked_image = load_image(masked_path)
+
 
     # Load and stash original
     image_bgr = load_image(image_path)
@@ -103,8 +114,22 @@ def process_image(image_path: Path, results_dir: Path) -> None:
         ("mask_clean_sized_example.png", mask_clean_sized),
         ("mask_final_example.png", mask_final),
     ]
-    compare_psnr_ssim_to_reference(
-        reference_image=masked_image,
-        targets=comparisons,
-        output_csv=features_dir / "psnr_ssim_examples.csv",
-    )
+    if masked_image is not None:
+        compare_psnr_ssim_to_reference(
+            reference_image=masked_image,
+            targets=comparisons,
+            output_csv=features_dir / "psnr_ssim_examples.csv",
+        )
+
+    # IoU/Dice against ground-truth (uses masked_image loaded above if present)
+    if masked_image is not None:
+        gt = masked_image
+        if gt.ndim == 3:
+            gt = gt[..., 0]
+        gt_bin = (gt > 0).astype(np.uint8)
+        pred_bin = (mask_final > 0).astype(np.uint8)
+        iou, dice = compute_iou_dice(pred_bin, gt_bin)
+        ensure_dir(features_dir / "metrics_examples.csv")
+        with open(features_dir / "metrics_examples.csv", "w", encoding="utf-8") as f:
+            f.write("name,iou,dice\n")
+            f.write(f"{image_path.name},{iou},{dice}\n")

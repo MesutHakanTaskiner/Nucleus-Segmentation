@@ -26,6 +26,7 @@ from .process_image import process_image
 from .process_directory import process_directory
 from .compute_psnr_ssim_arrays import compute_psnr_ssim_arrays
 from .compare_psnr_ssim_to_reference import compare_psnr_ssim_to_reference
+from .compute_iou_dice import compute_iou_dice
 
 __all__ = [
     "ensure_dir",
@@ -56,4 +57,5 @@ __all__ = [
     "process_directory",
     "compute_psnr_ssim_arrays",
     "compare_psnr_ssim_to_reference",
+    "compute_iou_dice",
 ]
