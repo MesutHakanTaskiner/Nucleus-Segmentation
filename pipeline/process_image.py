@@ -33,6 +33,12 @@ def process_image(image_path: Path, results_dir: Path) -> None:
     overlays_dir = results_dir / "overlays"
     masks_dir = results_dir / "masks"
     features_dir = results_dir / "features"
+    
+    masked_path = str(image_path).split("\\")
+    masked_path[2] = "masks"
+    masked_path = Path("\\".join(masked_path))
+    
+    masked_image = load_image(masked_path)
 
     # Load and stash original
     image_bgr = load_image(image_path)
@@ -98,7 +104,7 @@ def process_image(image_path: Path, results_dir: Path) -> None:
         ("mask_final_example.png", mask_final),
     ]
     compare_psnr_ssim_to_reference(
-        reference_image=image_bgr,
+        reference_image=masked_image,
         targets=comparisons,
         output_csv=features_dir / "psnr_ssim_examples.csv",
     )
