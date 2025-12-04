@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import cv2
 import numpy as np
 from skimage import exposure
 
@@ -34,21 +35,21 @@ def process_image(image_path: Path, results_dir: Path) -> None:
     overlays_dir = results_dir / "overlays"
     masks_dir = results_dir / "masks"
     features_dir = results_dir / "features"
-    
+
     # Try to locate a paired ground-truth mask (optional)
-    gt_candidate = [
+    gt_candidates = [
+        Path("data") / "masks_gt" / image_path.name,
         image_path.parent.parent / "masks" / image_path.name,
     ]
 
     masked_image = None
-    for candidate in gt_candidate:
+    for candidate in gt_candidates:
         if candidate.exists():
             try:
                 masked_image = load_image(candidate)
             except Exception:
                 masked_image = None
             break
-    
 
     # Load and stash original
     image_bgr = load_image(image_path)
@@ -74,12 +75,38 @@ def process_image(image_path: Path, results_dir: Path) -> None:
     mask_clean_sized = size_filter_mask(mask_clean, min_area=20, max_area=None)
     save_image(masks_dir / "mask_clean_sized_example.png", mask_clean_sized)
 
-    # Marker creation via distance transform
-    dist_map = compute_distance_transform(mask_clean_sized)
+    # Marker creation via distance transform (with optional erosion to help separate overlaps)
+    dist_input = mask_clean_sized.copy()
+    dist_pre_erosion_iter = 1  # slight erosion to create gaps between touching nuclei
+    if dist_pre_erosion_iter > 0:
+        dist_input = cv2.erode(dist_input, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=dist_pre_erosion_iter)
+    dist_map = compute_distance_transform(dist_input)
     dist_map_norm = normalize_distance_map(dist_map)
     save_image(overlays_dir / "distance_map_example.png", visualize_distance_map(dist_map_norm))
 
-    fg_markers = get_foreground_markers(dist_map_norm, threshold_ratio=0.35)
+    # Foreground markers: sweep multiple threshold ratios and a local-maxima variant
+    marker_closing_kernel = 3
+    min_marker_area = 10
+    threshold_ratios = [0.25, 0.30, 0.35, 0.40]
+    for tr in threshold_ratios:
+        fg_tmp = get_foreground_markers(
+            dist_map_norm,
+            threshold_ratio=tr,
+            min_marker_area=min_marker_area,
+            use_local_maxima=False,
+            apply_closing_kernel=marker_closing_kernel,
+        )
+        save_image(masks_dir / f"markers_fg_tr_{int(tr*100)}.png", fg_tmp)
+
+    fg_markers = get_foreground_markers(
+        dist_map_norm,
+        threshold_ratio=0.35,
+        min_marker_area=min_marker_area,
+        use_local_maxima=True,
+        footprint_size=5,
+        h_max=0.05,
+        apply_closing_kernel=marker_closing_kernel,
+    )
     save_image(masks_dir / "markers_fg_example.png", fg_markers)
 
     bg_markers = get_background_markers(mask_clean_sized, dilation_iter=2)
@@ -89,7 +116,9 @@ def process_image(image_path: Path, results_dir: Path) -> None:
     save_image(overlays_dir / "markers_combined_example.png", visualize_markers(marker_image))
 
     # Gradient + watershed
-    gradient_image = compute_gradient(gray_enhanced.astype(np.float32))
+    gray_for_gradient = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
+    gradient_image = compute_gradient(gray_for_gradient.astype(np.float32))
+    gradient_image = cv2.GaussianBlur(gradient_image, (3, 3), 0)  # smooth noisy gradients
     grad_vis = exposure.rescale_intensity(gradient_image, out_range=(0, 255)).astype(np.uint8)
     save_image(overlays_dir / "gradient_example.png", grad_vis)
 
