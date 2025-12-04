@@ -50,7 +50,6 @@ def process_image(image_path: Path, results_dir: Path) -> None:
             break
     
 
-
     # Load and stash original
     image_bgr = load_image(image_path)
     save_image(overlays_dir / "original_example.png", image_bgr)
