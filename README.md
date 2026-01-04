@@ -34,6 +34,11 @@ python main_nucleus_segmentation.py --results-dir results/sample_run
 ```
 python main_nucleus_segmentation.py --input data/MoNuSeg/img/0001.png --results-dir results/0001
 ```
+- Process all images under a directory (each image gets its own subfolder named after the file stem):
+```
+python main_nucleus_segmentation.py --input-dir data/MoNuSeg/img --results-dir results/monuseg_all
+```
+  - Optional: `--limit 5` to process only the first 5 images.
 
 Outputs (under the chosen `results` directory):
 - `overlays/`: original, grayscale, denoised, CLAHE, distance map visualization, markers visualization, gradient, watershed label overlay.
@@ -65,4 +70,3 @@ PY
 - Tune parameters in `pipeline/process_image.py` (e.g., `min_marker_area`, `threshold_ratio`, `footprint_size`, `dist_pre_erosion_iter`) to better separate touching nuclei.
 - Images are expected as 8-bit grayscale or BGR; convert before running if needed.
 - For batch processing, `pipeline/process_directory.py` shows how to hook the same pipeline into a directory traversal (currently it processes the first found image; extend the loop to process all).
-
