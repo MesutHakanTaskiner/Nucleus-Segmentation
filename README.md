@@ -34,6 +34,10 @@ python main_nucleus_segmentation.py --results-dir results/sample_run
 ```
 python main_nucleus_segmentation.py --input data/MoNuSeg/img/0001.png --results-dir results/0001
 ```
+- Process a specific image and a folder in one run (each image gets its own subfolder):
+```
+python main_nucleus_segmentation.py --input data/MoNuSeg/img/0001.png --input-dir data/MoNuSeg/img --results-dir results/monuseg_all
+```
 - Process all images under a directory (each image gets its own subfolder named after the file stem):
 ```
 python main_nucleus_segmentation.py --input-dir data/MoNuSeg/img --results-dir results/monuseg_all
