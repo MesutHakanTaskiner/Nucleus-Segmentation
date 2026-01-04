@@ -28,8 +28,21 @@ def main() -> None:
     
 
     print(f"Processing image: {image_path}")
-    process_image(image_path, args.results_dir)
-    print("Done. Outputs written to results/")
+    results = process_image(image_path, args.results_dir)
+    nucleus_count = results.get("nuclei_count")
+    print("Done.")
+    if nucleus_count is not None:
+        print(f"Nucleus count: {nucleus_count}")
+    if "metrics_csv" in results:
+        print(f"IoU/Dice CSV: {results['metrics_csv']}")
+    if "psnr_ssim_csv" in results:
+        print(f"PSNR/SSIM CSV: {results['psnr_ssim_csv']}")
+    if "features_csv" in results:
+        print(f"Features CSV: {results['features_csv']}")
+    if "final_mask" in results:
+        print(f"Final mask: {results['final_mask']}")
+    if "overlay_image" in results:
+        print(f"Overlay image: {results['overlay_image']}")
 
 
 if __name__ == "__main__":

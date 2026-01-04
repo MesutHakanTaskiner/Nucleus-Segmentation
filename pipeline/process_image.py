@@ -30,11 +30,13 @@ from .ensure_dir import ensure_dir
 from .compute_iou_dice import compute_iou_dice
 
 
-def process_image(image_path: Path, results_dir: Path) -> None:
+def process_image(image_path: Path, results_dir: Path) -> dict:
     """Run the full classical pipeline on one image and write all intermediates/results."""
     overlays_dir = results_dir / "overlays"
     masks_dir = results_dir / "masks"
     features_dir = results_dir / "features"
+    results_summary: dict = {}
+    base_name = image_path.stem
 
     # Try to locate a paired ground-truth mask (optional)
     gt_candidates = [
@@ -53,27 +55,27 @@ def process_image(image_path: Path, results_dir: Path) -> None:
 
     # Load and stash original
     image_bgr = load_image(image_path)
-    save_image(overlays_dir / "original_example.png", image_bgr)
+    save_image(overlays_dir / f"{base_name}_original.png", image_bgr)
 
     # Preprocess: grayscale -> denoise -> CLAHE
     gray = to_grayscale(image_bgr)
-    save_image(overlays_dir / "gray_example.png", gray)
+    save_image(overlays_dir / f"{base_name}_gray.png", gray)
 
     gray_denoised = denoise(gray, ksize=3)
-    save_image(overlays_dir / "gray_denoised_example.png", gray_denoised)
+    save_image(overlays_dir / f"{base_name}_gray_denoised.png", gray_denoised)
 
     gray_enhanced = enhance_contrast_clahe(gray_denoised)
-    save_image(overlays_dir / "gray_enhanced_example.png", gray_enhanced)
+    save_image(overlays_dir / f"{base_name}_gray_clahe.png", gray_enhanced)
 
     mask_raw = segment_otsu(gray_enhanced, invert=False)
-    save_image(masks_dir / "mask_otsu_raw_example.png", mask_raw)
+    save_image(masks_dir / f"{base_name}_mask_otsu.png", mask_raw)
 
     # Morphology + size filtering
     mask_clean = morphological_cleanup(mask_raw, open_kernel=3, close_kernel=3)
-    save_image(masks_dir / "mask_clean_example.png", mask_clean)
+    save_image(masks_dir / f"{base_name}_mask_clean.png", mask_clean)
 
     mask_clean_sized = size_filter_mask(mask_clean, min_area=20, max_area=None)
-    save_image(masks_dir / "mask_clean_sized_example.png", mask_clean_sized)
+    save_image(masks_dir / f"{base_name}_mask_clean_sized.png", mask_clean_sized)
 
     # Marker creation via distance transform (with optional erosion to help separate overlaps)
     dist_input = mask_clean_sized.copy()
@@ -82,7 +84,7 @@ def process_image(image_path: Path, results_dir: Path) -> None:
         dist_input = cv2.erode(dist_input, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=dist_pre_erosion_iter)
     dist_map = compute_distance_transform(dist_input)
     dist_map_norm = normalize_distance_map(dist_map)
-    save_image(overlays_dir / "distance_map_example.png", visualize_distance_map(dist_map_norm))
+    save_image(overlays_dir / f"{base_name}_distance_map.png", visualize_distance_map(dist_map_norm))
 
     # Foreground markers: sweep multiple threshold ratios and a local-maxima variant
     marker_closing_kernel = 3
@@ -96,7 +98,7 @@ def process_image(image_path: Path, results_dir: Path) -> None:
             use_local_maxima=False,
             apply_closing_kernel=marker_closing_kernel,
         )
-        save_image(masks_dir / f"markers_fg_tr_{int(tr*100)}.png", fg_tmp)
+        save_image(masks_dir / f"{base_name}_markers_fg_tr_{int(tr*100)}.png", fg_tmp)
 
     fg_markers = get_foreground_markers(
         dist_map_norm,
@@ -107,47 +109,58 @@ def process_image(image_path: Path, results_dir: Path) -> None:
         h_max=0.05,
         apply_closing_kernel=marker_closing_kernel,
     )
-    save_image(masks_dir / "markers_fg_example.png", fg_markers)
+    save_image(masks_dir / f"{base_name}_markers_fg.png", fg_markers)
 
     bg_markers = get_background_markers(mask_clean_sized, dilation_iter=2)
-    save_image(masks_dir / "markers_bg_example.png", bg_markers)
+    save_image(masks_dir / f"{base_name}_markers_bg.png", bg_markers)
 
     marker_image = build_marker_image(fg_markers, bg_markers)
-    save_image(overlays_dir / "markers_combined_example.png", visualize_markers(marker_image))
+    save_image(overlays_dir / f"{base_name}_markers_combined.png", visualize_markers(marker_image))
 
     # Gradient + watershed
     gray_for_gradient = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
     gradient_image = compute_gradient(gray_for_gradient.astype(np.float32))
     gradient_image = cv2.GaussianBlur(gradient_image, (3, 3), 0)  # smooth noisy gradients
     grad_vis = exposure.rescale_intensity(gradient_image, out_range=(0, 255)).astype(np.uint8)
-    save_image(overlays_dir / "gradient_example.png", grad_vis)
+    save_image(overlays_dir / f"{base_name}_gradient.png", grad_vis)
 
     labels_raw = apply_watershed(gradient_image, marker_image)
     labels = postprocess_labels(labels_raw)
     overlay = overlay_labels_on_image(image_bgr, labels, alpha=0.6)
-    save_image(overlays_dir / "segmentation_overlay_example.png", overlay)
+    save_image(overlays_dir / f"{base_name}_segmentation_overlay.png", overlay)
 
     # Final mask and features
     mask_final = get_final_binary_mask(labels)
-    save_image(masks_dir / "mask_final_example.png", mask_final)
+    save_image(masks_dir / f"{base_name}_mask_final.png", mask_final)
 
     features = extract_nuclei_features(labels, gray_enhanced)
-    ensure_dir(features_dir / "nuclei_features_example.csv")
-    features.to_csv(features_dir / "nuclei_features_example.csv", index=False)
+    features_csv = features_dir / f"{base_name}_nuclei_features.csv"
+    ensure_dir(features_csv)
+    features.to_csv(features_csv, index=False)
+    nuclei_count = len(features)
+    nuclei_count_file = features_dir / f"{base_name}_nuclei_count.txt"
+    with open(nuclei_count_file, "w", encoding="utf-8") as f:
+        f.write(f"{nuclei_count}\n")
+    results_summary["nuclei_count"] = nuclei_count
+    results_summary["features_csv"] = features_csv
+    results_summary["nuclei_count_file"] = nuclei_count_file
+    results_summary["final_mask"] = masks_dir / f"{base_name}_mask_final.png"
+    results_summary["overlay_image"] = overlays_dir / f"{base_name}_segmentation_overlay.png"
 
     # PSNR/SSIM comparisons against original image
     comparisons = [
-        ("mask_otsu_raw_example.png", mask_raw),
-        ("mask_clean_example.png", mask_clean),
-        ("mask_clean_sized_example.png", mask_clean_sized),
-        ("mask_final_example.png", mask_final),
+        (f"{base_name}_mask_otsu.png", mask_raw),
+        (f"{base_name}_mask_clean.png", mask_clean),
+        (f"{base_name}_mask_clean_sized.png", mask_clean_sized),
+        (f"{base_name}_mask_final.png", mask_final),
     ]
     if masked_image is not None:
         compare_psnr_ssim_to_reference(
             reference_image=masked_image,
             targets=comparisons,
-            output_csv=features_dir / "psnr_ssim_examples.csv",
+            output_csv=features_dir / f"{base_name}_psnr_ssim.csv",
         )
+        results_summary["psnr_ssim_csv"] = features_dir / f"{base_name}_psnr_ssim.csv"
 
     # IoU/Dice against ground-truth (uses masked_image loaded above if present)
     if masked_image is not None:
@@ -155,9 +168,16 @@ def process_image(image_path: Path, results_dir: Path) -> None:
         if gt.ndim == 3:
             gt = gt[..., 0]
         gt_bin = (gt > 0).astype(np.uint8)
+        save_image(masks_dir / f"{base_name}_mask_ground_truth.png", gt_bin * 255)
         pred_bin = (mask_final > 0).astype(np.uint8)
         iou, dice = compute_iou_dice(pred_bin, gt_bin)
-        ensure_dir(features_dir / "metrics_examples.csv")
-        with open(features_dir / "metrics_examples.csv", "w", encoding="utf-8") as f:
+        metrics_csv = features_dir / f"{base_name}_metrics.csv"
+        ensure_dir(metrics_csv)
+        with open(metrics_csv, "w", encoding="utf-8") as f:
             f.write("name,iou,dice\n")
             f.write(f"{image_path.name},{iou},{dice}\n")
+        results_summary["metrics_csv"] = metrics_csv
+        results_summary["iou"] = iou
+        results_summary["dice"] = dice
+
+    return results_summary
