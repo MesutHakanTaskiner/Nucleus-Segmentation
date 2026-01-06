@@ -74,6 +74,15 @@ Each script takes `--manifest` and `--idx` to pick a row from the manifest.
     --out-dir results/final
   ```
 
+- **run_full_pipeline.py** – processes the entire manifest (or first N samples) through stages 2–6, saving final artifacts and per-sample feature CSVs plus a consolidated summary.
+  ```bash
+  python scripts/run_full_pipeline.py --manifest data/manifest.csv --out-dir results/full_run --limit 10 \
+    --blur-ksize 5 \
+    --open-ksize 3 --close-ksize 3 --min-area 30 \
+    --dist-erode-iter 1 --min-distance 6 --peak-rel-thresh 0.15 --seed-dilate 2 \
+    --bg-dilate-iter 2 --min-instance-area 20
+  ```
+
 ## Core modules (`src/`)
 - `dataset.py` – dataset discovery, manifest writing, and image/mask loaders.
 - `metrics.py` – IoU/Dice for binary masks.
