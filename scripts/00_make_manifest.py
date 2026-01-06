@@ -10,7 +10,7 @@ def main() -> None:
     parser.add_argument(
         "--data-root",
         type=Path,
-        default=Path("data/U_NET/train"),
+        default=Path("data/U_NET/test"),
         help="Root folder of the extracted dataset.",
     )
     parser.add_argument("--out", type=Path, default=Path("data/manifest.csv"), help="Output manifest CSV path.")
