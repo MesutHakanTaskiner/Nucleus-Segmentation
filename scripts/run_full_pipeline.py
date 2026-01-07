@@ -127,24 +127,27 @@ def main() -> None:
         image_path = Path(row["image_path"])
         mask_paths = [Path(p) for p in str(row["mask_paths"]).split(";") if p.strip()]
 
-        summary = process_sample(
-            image_id=image_id,
-            image_path=image_path,
-            mask_paths=mask_paths,
-            out_root=args.out_dir,
-            s2_blur_ksize=args.blur_ksize,
-            s3_open_ksize=args.open_ksize,
-            s3_close_ksize=args.close_ksize,
-            s3_min_area=args.min_area,
-            s4_dist_erode_iter=args.dist_erode_iter,
-            s4_min_distance=args.min_distance,
-            s4_peak_rel_thresh=args.peak_rel_thresh,
-            s4_seed_dilate=args.seed_dilate,
-            s4_bg_dilate_iter=args.bg_dilate_iter,
-            s4_min_instance_area=args.min_instance_area,
-        )
-        results.append(summary)
-        print(json.dumps(summary, indent=2))
+        try:
+            summary = process_sample(
+                image_id=image_id,
+                image_path=image_path,
+                mask_paths=mask_paths,
+                out_root=args.out_dir,
+                s2_blur_ksize=args.blur_ksize,
+                s3_open_ksize=args.open_ksize,
+                s3_close_ksize=args.close_ksize,
+                s3_min_area=args.min_area,
+                s4_dist_erode_iter=args.dist_erode_iter,
+                s4_min_distance=args.min_distance,
+                s4_peak_rel_thresh=args.peak_rel_thresh,
+                s4_seed_dilate=args.seed_dilate,
+                s4_bg_dilate_iter=args.bg_dilate_iter,
+                s4_min_instance_area=args.min_instance_area,
+            )
+            results.append(summary)
+            print(json.dumps(summary, indent=2))
+        except Exception as e:
+            print(f"Error processing sample {image_id}: {e}")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     with open(args.out_dir / "run_summary.json", "w", encoding="utf-8") as f:
