@@ -93,6 +93,39 @@ Each script takes `--manifest` and `--idx` to pick a row from the manifest.
 - `stage6_final_save.py` – saves predicted/GT labels (16-bit), binaries, overlays, and comparison panel.
 - `viz.py` – overlay and PNG save helpers.
 
+## Project structure
+```
+Nucleus-Segmentation/
+  README.md
+  requirements.txt
+  data/
+    U_NET/
+    MoNuSeg/
+    kmms/
+  scripts/
+    _path.py
+    00_make_manifest.py
+    01_inspect_sample.py
+    02_stage2_threshold_baseline.py
+    03_stage3_morph_cleanup.py
+    04_stage4_watershed_instances.py
+    05_stage5_extract_features.py
+    06_stage6_final_outputs.py
+    run_full_pipeline.py
+  src/
+    __init__.py
+    dataset.py
+    metrics.py
+    stage2_threshold.py
+    stage3_morphology.py
+    stage4_watershed.py
+    stage5_features.py
+    stage6_final_save.py
+    viz.py
+  old/  # legacy prototype (not used by current pipeline)
+  results/  # generated outputs
+```
+
 ## Tips
 - Keep resolutions consistent across images/masks; mismatched shapes will raise errors.
 - Use `--idx` to iterate through samples when tuning parameters.
