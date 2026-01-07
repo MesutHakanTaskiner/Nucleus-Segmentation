@@ -81,17 +81,17 @@ def process_sample(
 
     return {
         "image_id": image_id,
-        "image_path": str(image_path),
+        #"image_path": str(image_path),
         "num_gt_instances": int(gt_inst.max()),
         "num_pred_instances": int(pred_labels.max()),
         "count_error": int(pred_labels.max() - gt_inst.max()),
         "binary_metrics_vs_gt": {"iou": float(iou), "dice": float(dice)},
-        "saved": {
-            "pred_labels": str(artifacts.pred_labels_path),
-            "gt_labels": str(artifacts.gt_labels_path),
-            "comparison": str(artifacts.comparison_path),
-            "features_csv": str(features_path),
-        },
+        #"saved": {
+        #    "pred_labels": str(artifacts.pred_labels_path),
+        #    "gt_labels": str(artifacts.gt_labels_path),
+        #    "comparison": str(artifacts.comparison_path),
+        #    "features_csv": str(features_path),
+        #},
     }
 
 
