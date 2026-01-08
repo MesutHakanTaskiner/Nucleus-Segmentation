@@ -1,188 +1,121 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
+from pathlib import Path
+import argparse
+import json
 import numpy as np
-import cv2
-from skimage.feature import peak_local_max
+import pandas as pd
+
+import _path  # noqa: F401; adds project root to sys.path for src imports
+from src.dataset import read_image_bgr, build_binary_and_instance_masks
+from src.metrics import iou_dice
+from src.stage2_threshold import run_stage2_threshold
+from src.stage3_morphology import run_stage3_morphology
+from src.stage4_watershed import run_stage4_watershed
+from src.viz import overlay_mask_on_image, save_png
 
 
-@dataclass(frozen=True)
-class Stage4Output:
-    dist_u8: np.ndarray
-    seeds01: np.ndarray
-    sure_bg01: np.ndarray
-    unknown01: np.ndarray
-    markers_pre: np.ndarray
-    labels: np.ndarray
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest", type=Path, default=Path("data/manifest.csv"))
+    parser.add_argument("--idx", type=int, default=0)
+    parser.add_argument("--out-dir", type=Path, default=Path("results/stage4"))
 
-
-def _binary01(x: np.ndarray) -> np.ndarray:
-    return (x > 0).astype(np.uint8)
-
-
-def normalize_to_u8(x: np.ndarray) -> np.ndarray:
-    x = x.astype(np.float32)
-    mn, mx = float(np.min(x)), float(np.max(x))
-    if mx <= mn + 1e-8:
-        return np.zeros_like(x, dtype=np.uint8)
-    y = (x - mn) / (mx - mn)
-    return (y * 255.0).astype(np.uint8)
-
-
-def compute_distance_map(mask01: np.ndarray, erode_iter: int = 0) -> np.ndarray:
-    """
-    Distance transform on binary mask. Optional erosion can help split touching objects,
-    but erosion can also delete small nuclei. Start with 0.
-    """
-    m = _binary01(mask01)
-    if erode_iter > 0:
-        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        m = cv2.erode(m, k, iterations=erode_iter)
-    dist = cv2.distanceTransform((m * 255).astype(np.uint8), cv2.DIST_L2, 5)
-    return dist.astype(np.float32)
-
-
-def build_markers_peak_local_max(
-    mask01: np.ndarray,
-    dist: np.ndarray,
-    min_distance: int = 6,
-    peak_rel_thresh: float = 0.15,
-    seed_dilate: int = 2,
-    bg_dilate_iter: int = 2,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Build watershed markers using local maxima on distance map.
-
-    - peak_local_max finds peak coordinates in dist within mask.
-    - We dilate seed points into tiny blobs -> connectedComponents -> unique markers.
-    - Background is 1, seeds are 2..K+1, unknown is 0 (cv2.watershed convention).
-    """
-    m = _binary01(mask01)
-
-    dmax = float(np.max(dist))
-    if dmax <= 1e-8:
-        seeds = np.zeros_like(m, dtype=np.uint8)
-    else:
-        # peak_local_max returns coords (row, col)
-        coords = peak_local_max(
-            dist,
-            labels=m,
-            min_distance=max(1, int(min_distance)),
-            threshold_abs=peak_rel_thresh * dmax,
-            exclude_border=False,
-        )
-        seeds = np.zeros_like(m, dtype=np.uint8)
-        if coords.size > 0:
-            seeds[coords[:, 0], coords[:, 1]] = 1
-
-        if seed_dilate > 0:
-            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * seed_dilate + 1, 2 * seed_dilate + 1))
-            seeds = cv2.dilate(seeds, k, iterations=1)
-
-    # Sure background from dilated foreground mask
-    kbg = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    sure_bg = cv2.dilate(m, kbg, iterations=int(bg_dilate_iter))
-
-    # Unknown region: background area that is not seed
-    unknown = ((sure_bg > 0) & (seeds == 0)).astype(np.uint8)
-
-    # Connected components on seeds => markers (0..K)
-    num, seed_labels = cv2.connectedComponents(seeds, connectivity=8)
-    markers = seed_labels.astype(np.int32) + 1  # background becomes 1
-    markers[unknown > 0] = 0  # unknown must be 0
-
-    return seeds, sure_bg, unknown, markers
-
-
-def watershed_input_gradient(image_bgr: np.ndarray) -> np.ndarray:
-    """
-    Build a cleaner watershed input image from gradient magnitude.
-    cv2.watershed expects 3-channel 8-bit or 32-bit image.
-    """
-    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (3, 3), 0)
-
-    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-    mag = cv2.magnitude(gx, gy)
-
-    mag_u8 = normalize_to_u8(mag)
-    # Stack to 3-channel
-    return cv2.cvtColor(mag_u8, cv2.COLOR_GRAY2BGR)
-
-
-def relabel_compact(labels: np.ndarray) -> np.ndarray:
-    """
-    Make labels contiguous 1..N (no gaps).
-    """
-    lab = labels.astype(np.int32, copy=False)
-    ids = np.unique(lab)
-    ids = ids[ids != 0]
-    mapping = {int(old): i + 1 for i, old in enumerate(ids)}
-    out = np.zeros_like(lab, dtype=np.int32)
-    for old, new in mapping.items():
-        out[lab == old] = new
-    return out
-
-
-def filter_instances_by_area(labels: np.ndarray, min_area: int = 20) -> np.ndarray:
-    """
-    Remove tiny predicted instances (common cause of overcount).
-    """
-    lab = labels.astype(np.int32, copy=False)
-    if lab.max() == 0:
-        return lab.copy()
-    areas = np.bincount(lab.ravel())
-    out = lab.copy()
-    for i in range(1, len(areas)):
-        if areas[i] < min_area:
-            out[out == i] = 0
-    return relabel_compact(out)
-
-
-def run_stage4_watershed(
-    image_bgr: np.ndarray,
-    mask01: np.ndarray,
-    dist_erode_iter: int = 0,
-    min_distance: int = 6,
-    peak_rel_thresh: float = 0.15,
-    seed_dilate: int = 2,
-    bg_dilate_iter: int = 2,
-    min_instance_area: int = 20,
-) -> Stage4Output:
-    """
-    Stage 4 (improved):
-    - distance transform
-    - peak_local_max seeds
-    - watershed on gradient image
-    - remove tiny instances
-    """
-    dist = compute_distance_map(mask01, erode_iter=dist_erode_iter)
-    dist_u8 = normalize_to_u8(dist)
-
-    seeds01, sure_bg01, unknown01, markers = build_markers_peak_local_max(
-        mask01=mask01,
-        dist=dist,
-        min_distance=min_distance,
-        peak_rel_thresh=peak_rel_thresh,
-        seed_dilate=seed_dilate,
-        bg_dilate_iter=bg_dilate_iter,
+    # Stage 2
+    parser.add_argument("--blur-ksize", type=int, default=5)
+    # Stage 3
+    parser.add_argument("--open-ksize", type=int, default=3)
+    parser.add_argument("--close-ksize", type=int, default=3)
+    parser.add_argument("--min-area", type=int, default=30)
+    # Stage 4
+    parser.add_argument("--dist-erode-iter", type=int, default=1)
+    parser.add_argument("--min-distance", type=int, default=6, help="Min distance between peaks in distance map")
+    parser.add_argument("--peak-rel-thresh", type=float, default=0.15, help="Relative peak threshold (0..1)")
+    parser.add_argument("--seed-dilate", type=int, default=2, help="Seed dilation radius in pixels")
+    parser.add_argument("--bg-dilate-iter", type=int, default=2, help="Background dilation iterations")
+    parser.add_argument(
+        "--min-instance-area",
+        type=int,
+        default=20,
+        help="Minimum area (pixels) for predicted instances after watershed",
     )
 
-    ws_img = watershed_input_gradient(image_bgr)
+    args = parser.parse_args()
 
-    markers_ws = markers.copy()
-    cv2.watershed(ws_img, markers_ws)
+    df = pd.read_csv(args.manifest)
+    if args.idx < 0 or args.idx >= len(df):
+        raise ValueError(f"idx out of range: {args.idx} (0..{len(df)-1})")
 
-    labels = np.zeros_like(markers_ws, dtype=np.int32)
-    labels[markers_ws >= 2] = markers_ws[markers_ws >= 2] - 1  # 2.. -> 1..
-    labels = filter_instances_by_area(labels, min_area=int(min_instance_area))
+    row = df.iloc[args.idx]
+    image_id = str(row["image_id"])
+    image_path = Path(row["image_path"])
+    mask_paths = [Path(p) for p in str(row["mask_paths"]).split(";") if p.strip()]
 
-    return Stage4Output(
-        dist_u8=dist_u8,
-        seeds01=seeds01,
-        sure_bg01=sure_bg01,
-        unknown01=unknown01,
-        markers_pre=markers,
-        labels=labels,
+    img = read_image_bgr(image_path)
+    gt_merged01, gt_inst = build_binary_and_instance_masks(mask_paths)
+
+    out = args.out_dir / image_id
+    out.mkdir(parents=True, exist_ok=True)
+
+    # Stage 2
+    s2 = run_stage2_threshold(img, blur_ksize=args.blur_ksize)
+
+    # Stage 3
+    s3 = run_stage3_morphology(
+        s2.pred_mask01,
+        open_ksize=args.open_ksize,
+        close_ksize=args.close_ksize,
+        min_area=args.min_area,
     )
+
+    # Stage 4
+    s4 = run_stage4_watershed(
+        image_bgr=img,
+        mask01=s3.filtered01,
+        dist_erode_iter=args.dist_erode_iter,
+        min_distance=args.min_distance,
+        peak_rel_thresh=args.peak_rel_thresh,
+        seed_dilate=args.seed_dilate,
+        bg_dilate_iter=args.bg_dilate_iter,
+        min_instance_area=args.min_instance_area,
+    )
+
+    pred_labels = s4.labels
+    pred_bin01 = (pred_labels > 0).astype(np.uint8)
+
+    iou, dice = iou_dice(pred_bin01, gt_merged01)
+
+    # Save artifacts
+    save_png(out / "image.png", img)
+    save_png(out / "gt_mask_merged.png", (gt_merged01 * 255).astype(np.uint8))
+    save_png(out / "pred_stage3_filtered.png", (s3.filtered01 * 255).astype(np.uint8))
+    save_png(out / "pred_stage4_labels.png", pred_labels.astype(np.uint16))
+    save_png(out / "pred_stage4_binary.png", (pred_bin01 * 255).astype(np.uint8))
+    save_png(out / "dist_u8.png", s4.dist_u8)
+    save_png(out / "seeds.png", (s4.seeds01 * 255).astype(np.uint8))
+    save_png(out / "sure_bg.png", (s4.sure_bg01 * 255).astype(np.uint8))
+    save_png(out / "unknown.png", (s4.unknown01 * 255).astype(np.uint8))
+    save_png(out / "markers_pre.png", s4.markers_pre.astype(np.uint16))
+    save_png(out / "overlay_pred.png", overlay_mask_on_image(img, pred_bin01, alpha=0.45))
+    save_png(out / "overlay_gt.png", overlay_mask_on_image(img, gt_merged01, alpha=0.45))
+
+    report = {
+        "image_id": image_id,
+        "num_gt_instances": int(gt_inst.max()),
+        "pred_instance_count": int(pred_labels.max()),
+        "binary_metrics_vs_gt_merged": {"iou": float(iou), "dice": float(dice)},
+        "stage4_params": {
+            "dist_erode_iter": int(args.dist_erode_iter),
+            "min_distance": int(args.min_distance),
+            "peak_rel_thresh": float(args.peak_rel_thresh),
+            "seed_dilate": int(args.seed_dilate),
+            "bg_dilate_iter": int(args.bg_dilate_iter),
+            "min_instance_area": int(args.min_instance_area),
+        },
+    }
+    with open(out / "report.json", "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+
+    print(json.dumps(report, indent=2))
+
+
+if __name__ == "__main__":
+    main()
