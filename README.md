@@ -4,13 +4,11 @@ End-to-end nucleus segmentation workflow built around a small set of reusable st
 
 ## Dependencies
 - Python 3.9+
-- numpy, pandas
-- opencv-python
-- scikit-image
+- Install from `requirements.txt` (pinned versions for this project)
 
 Install inside a virtualenv/conda env:
 ```bash
-pip install numpy pandas opencv-python scikit-image
+pip install -r requirements.txt
 ```
 
 > Run scripts from the repository root so imports like `from src...` resolve correctly.
@@ -52,7 +50,15 @@ Each script takes `--manifest` and `--idx` to pick a row from the manifest.
     --open-ksize 3 --close-ksize 3 --min-area 30 --out-dir results/stage3
   ```
 
-- **04_stage4_watershed_instances.py** – stand-alone watershed experiment tool (distance transform + peak-local-max seeds). Useful for tuning stage 4 parameters.
+- **04_stage4_watershed_instances.py** – runs stages 2–4 and saves watershed debug artifacts plus metrics; useful for tuning stage 4 parameters.
+  ```bash
+  python scripts/04_stage4_watershed_instances.py --manifest data/manifest.csv --idx 0 \
+    --blur-ksize 5 \
+    --open-ksize 3 --close-ksize 3 --min-area 30 \
+    --dist-erode-iter 1 --min-distance 6 --peak-rel-thresh 0.15 --seed-dilate 2 \
+    --bg-dilate-iter 2 --min-instance-area 20 \
+    --out-dir results/stage4
+  ```
 
 - **05_stage5_extract_features.py** – runs stages 2–4, then extracts per-nucleus features and writes `nuclei_features.csv` plus a summary JSON.
   ```bash
